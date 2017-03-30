@@ -101,7 +101,25 @@ class TaurusValuesIOTableModel(Qt.QAbstractTableModel):
             tabledata = self._wtabledata
         if not index.isValid() or not (0 <= index.row() < len(tabledata)):
             return Qt.QVariant()
-        elif role == Qt.Qt.DisplayRole:
+        elif (role == Qt.Qt.CheckStateRole and
+                self.typeCastingMap[tabledata.dtype.kind] == bool):
+            value = None
+            rc = (index.row(), index.column())
+            if self._writeMode and rc in self._modifiedDict:
+                value = self._modifiedDict[rc]
+            else:
+                value = tabledata[rc]
+                if isinstance(value, Quantity):
+                    value = value.magnitude
+            # cast the value to a standard python type
+            value = self.typeCastingMap[tabledata.dtype.kind](value)
+            if value:
+                value = Qt.Qt.Checked
+            else:
+                value = Qt.Qt.Unchecked
+            return value
+        elif (role == Qt.Qt.DisplayRole and
+                self.typeCastingMap[tabledata.dtype.kind] != bool):
             value = None
             rc = (index.row(), index.column())
             if self._writeMode and rc in self._modifiedDict:
@@ -276,7 +294,7 @@ class TaurusValuesIOTableModel(Qt.QAbstractTableModel):
                     table[k] = q
                 elif kind == 'b':
                     # TODO: This does not work Qt.from_qvariant(v, bool)
-                    if str(v) == "true":
+                    if str(v).lower() == "true":
                         table[k] = True
                     else:
                         table[k] = False
@@ -467,8 +485,7 @@ class TaurusValuesIOTableDelegate(Qt.QStyledItemDelegate):
         see :meth:`Qt.QStyledItemDelegate.createEditor`
         '''
         if index.model().getType() == bool:
-            #editor = Qt.QStyledItemDelegate.createEditor(self,parent,option,index)
-            editor = Qt.QComboBox(parent)
+            editor = Qt.QCheckBox(parent)
         else:
             editor = TableInlineEdit(parent)
             editor._updateValidator(index.model().getAttr())
@@ -484,11 +501,9 @@ class TaurusValuesIOTableDelegate(Qt.QStyledItemDelegate):
         index.model().editedIndex = (index.row(), index.column())
         self._initialText = None
         if index.model().getType() == bool:
-            editor.addItems(['true', 'false'])
-            a = str(Qt.from_qvariant(index.data(), bool)).lower()
-            self._initialText = a
-
-            editor.setCurrentIndex(editor.findText(a))
+            checked = index.model().data(index, Qt.Qt.EditRole)
+            self._initialText = checked
+            editor.setChecked(checked)
         else:
             data = index.model().data(index, Qt.Qt.EditRole)
             self._initialText = Qt.from_qvariant(data, str)
@@ -507,7 +522,7 @@ class TaurusValuesIOTableDelegate(Qt.QStyledItemDelegate):
             if not model.inRange(q):
                 return
         if index.model().getType() == bool:
-            text = editor.currentText()
+            text = editor.isChecked()
         else:
             if isNumeric:
                 text = q
