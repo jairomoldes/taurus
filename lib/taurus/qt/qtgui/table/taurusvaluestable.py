@@ -384,6 +384,105 @@ class TaurusValuesIOTableModel(Qt.QAbstractTableModel):
         return self._rtabledata[index.row(), index.column()]
 
 
+class TaurusValuesSlicedArrayModel(TaurusValuesIOTableModel):
+    '''
+    Table model that allows representing 1D data in 2D format with optionally
+    different number of items per row
+    '''
+
+    def __init__(self, slices=[], parent=None):
+        self._parent = parent
+        name = self.__class__.__name__
+        TaurusValuesIOTableModel.__init__(self, [1, 1], parent)
+        self.slices = slices
+        self._super = super(TaurusValuesSlicedArrayModel, self)
+
+    def setSlices(self, slices):
+        '''
+        Set optional slices (number of items to show / row) used only for 1Ds
+
+        .. note:: sum(slices) should be exactly the same as the length of the
+                  read value of the model (otherwise slices will be silently
+                  ignored)
+
+        :param slices: (list) each value is the number of items to show / row
+        '''
+        self.slices = slices
+
+    def validSlices(self):
+        '''
+        Checks if current slices are valid by checking if the length of the
+        underlying 1D matches the sum of all slices size
+
+        :return: (bool) true if slices are valid false otherwise
+        '''
+        if len(self.slices) == 0:
+            valid = False
+        elif (self._super.rowCount() == sum(self.slices) and
+              self._super.columnCount() == 1):
+            valid = True
+        else:
+            valid = False
+        return valid
+
+    def toSuperCoordinates(self, index):
+        '''
+        Given a qt index in 2D coordinates it returns the corresponding index
+        in parent's 1D coordinates
+
+        :param index: (QModelIndex ) qt index in 2D coordinates
+        :return: (QModelIndex) qt index in the corresponding 1D coordinates
+        '''
+        if index.isValid():
+            row = index.row()
+            col = index.column()
+            idx = sum(self.slices[:row])  # accumulate slices
+            idx += col
+            if col < self.slices[row]:
+                index = self.createIndex(idx, 0)
+            else:
+                index = Qt.QModelIndex()  # create invalid index
+        return index
+
+    def flags(self, index):
+        '''see :meth:`Qt.QAbstractTableModel.flags`'''
+        if self.validSlices():
+            index = self.toSuperCoordinates(index)
+        return self._super.flags(index)
+
+    def addValue(self, index, value):
+        '''adds a value to parent's dictionary of modified cell values
+
+        :param index: (QModelIndex) table index
+        :param value: (object)
+        '''
+        if self.validSlices():
+            index = self.toSuperCoordinates(index)
+        return self._super.addValue(index, value)
+
+    def data(self, index, role=Qt.Qt.DisplayRole):
+        '''see :meth:`Qt.QAbstractTableModel.data`'''
+        if self.validSlices():
+            index = self.toSuperCoordinates(index)
+        return self._super.data(index, role)
+
+    def rowCount(self, index=Qt.QModelIndex()):
+        '''see :meth:`Qt.QAbstractTableModel.rowCount`'''
+        if self.validSlices():
+            count = len(self.slices)
+        else:
+            count = self._super.rowCount(index)
+        return count
+
+    def columnCount(self, index=Qt.QModelIndex()):
+        '''see :meth:`Qt.QAbstractTableModel.columnCount`'''
+        if self.validSlices():
+            count = max(self.slices)
+        else:
+            count = self._super.columnCount(index)
+        return count
+
+
 class TaurusValuesIOTable(Qt.QTableView):
 
     def __init__(self, parent=None):
@@ -393,6 +492,7 @@ class TaurusValuesIOTable(Qt.QTableView):
         self._showQuality = True
         self._attr = None
         self._value = None
+        self._slices = []
         self.setSelectionMode(Qt.QAbstractItemView.SingleSelection)
         itemDelegate = TaurusValuesIOTableDelegate(self)
         self.setItemDelegate(itemDelegate)
@@ -409,8 +509,32 @@ class TaurusValuesIOTable(Qt.QTableView):
         :param shape:  (tuple<int>) shape of the model table to be set
 
         '''
-        qmodel = TaurusValuesIOTableModel(shape, parent=self)
+        if len(self._slices) > 0:
+            qmodel = TaurusValuesSlicedArrayModel(self._slices, parent=self)
+        else:
+            qmodel = TaurusValuesIOTableModel(shape, parent=self)
         Qt.QTableView.setModel(self, qmodel)
+
+    def setSlices(self, slices):
+        '''
+        Set table view model's optional slice (number of items to show / row)
+        This feature is optional and works only with 1D attributes. It is
+        meant to be used if you want to show the 1D data sliced in chunks,
+        each chunk shown in a different row. For example, if you have a 1D
+        with 6 elements and you want to show 3 of them in the first row, 2 in
+        the second and 1 in the third you can use setSlice([3,2,1])
+
+        .. note:: sum(slices) should be exactly the same as the length of the
+                  read value of the model (otherwise slices will be silently
+                  ignored)
+                  This function should be called AFTER setting the model
+
+        :param slices: (list) each value is the number of items to show / row
+        '''
+        if self._slices != slices:
+            self._slices = slices
+            qmodel = TaurusValuesSlicedArrayModel(slices, parent=self)
+            Qt.QTableView.setModel(self, qmodel)
 
     def cancelChanges(self):
         '''
@@ -844,6 +968,24 @@ class TaurusValuesTable(TaurusWidget):
                 v = ta.read()
                 # @fixme: this is ugly! we should not be writing into the attribute without asking first...
                 ta.write(v.rvalue)
+
+    def setSlices(self, slices):
+        '''
+        Set table view model's optional slices (number of items to show / row)
+        This feature is optional and works only with 1D attributes. It is
+        meant to be used if you want to show the 1D data sliced in chunks,
+        each chunk shown in a different row. For example, if you have a 1D
+        with 6 elements and you want to show 3 of them in the first row, 2 in
+        the second and 1 in the third you can use setSlice([3,2,1])
+
+        .. note:: sum(slices) should be exactly the same as the length of the
+                  read value of the model (otherwise slices will be silently
+                  ignored)
+                  This function should be called AFTER setting the model
+
+        :param slices: (list) each value is the number of items to show / row
+        '''
+        self._tableView.setSlices(slices)
 
     def resetWriteMode(self):
         '''equivalent to self.setWriteMode(self.defaultWriteMode)'''
